@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"time"
+	"strings"
 
 	hdfs "github.com/colinmarc/hdfs/protocol/hadoop_hdfs"
 	"github.com/colinmarc/hdfs/rpc"
@@ -19,44 +20,31 @@ type Client struct {
 
 // ClientOptions represents the configurable options for a client.
 type ClientOptions struct {
-	Addresses      []string
-	Namenode       *rpc.NamenodeConnection
-	User           string
+	// Addresses specifies the namenode(s) to connect to.
+	Addresses []string
+	// User specifies which HDFS user the client will act as.
+	User string
+	// Namenode optionally specifies an existing NamenodeConnection to wrap. This
+	// is useful if you needed to create the namenode net.Conn manually for
+	// whatever reason.
+	Namenode *rpc.NamenodeConnection
+	// ConnectTimeout specifies the connection timeout for the RPC connection.
 	ConnectTimeout time.Duration
 }
 
-// Username returns the value of HADOOP_USER_NAME in the environment, or
-// the current system user if it is not set.
-func Username() (string, error) {
-	username := os.Getenv("HADOOP_USER_NAME")
-	if username != "" {
-		return username, nil
-	}
-	currentUser, err := user.Current()
-	if err != nil {
-		return "", err
-	}
-	return currentUser.Username, nil
+// ClientOptionsFromConf attempts to load any relevant configuration options
+// from the given Hadoop configuration and create a ClientOptions struct
+// suitable for creating a Client. Currently this is restricted to the namenode
+// address(es), but may be expanded in the future.
+func ClientOptionsFromConf(conf HadoopConf) (ClientOptions, error) {
+	namenodes, err := conf.Namenodes()
+	return ClientOptions{Addresses: namenodes}, err
 }
 
 // NewClient returns a connected Client for the given options, or an error if
 // the client could not be created.
 func NewClient(options ClientOptions) (*Client, error) {
 	var err error
-
-	if options.User == "" {
-		options.User, err = Username()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if options.Addresses == nil || len(options.Addresses) == 0 {
-		options.Addresses, err = getNameNodeFromConf()
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	if options.Namenode == nil {
 		options.Namenode, err = rpc.NewNamenodeConnectionWithOptions(
@@ -78,28 +66,27 @@ func NewClient(options ClientOptions) (*Client, error) {
 }
 
 // New returns a connected Client, or an error if it can't connect. The user
-// will be the user the code is running under. If address is an empty string
-// it will try and get the namenode address from the hadoop configuration
-// files.
+// will be the current system user. Any relevantoptions (including the
+// address(es) of the namenode(s), if an empty string is passed) will be loaded
+// from the Hadoop configuration present at HADOOP_CONF_DIR.
 func New(address string) (*Client, error) {
-	options := ClientOptions{}
+	conf := LoadHadoopConf("")
+	options, err := ClientOptionsFromConf(conf)
+	if err != nil {
+		options = ClientOptions{}
+	}
 
 	if address != "" {
-		options.Addresses = []string{address}
+		options.Addresses = strings.Split(address, ",")
 	}
 
+	u, err := user.Current()
+	if err != nil {
+		return nil, err
+	}
+
+	options.User = u.Username
 	return NewClient(options)
-}
-
-// getNameNodeFromConf returns namenodes from the system Hadoop configuration.
-func getNameNodeFromConf() ([]string, error) {
-	hadoopConf := LoadHadoopConf("")
-
-	namenodes, nnErr := hadoopConf.Namenodes()
-	if nnErr != nil {
-		return nil, nnErr
-	}
-	return namenodes, nil
 }
 
 // NewForUser returns a connected Client with the user specified, or an error if
@@ -190,4 +177,17 @@ func (c *Client) fetchDefaults() (*hdfs.FsServerDefaultsProto, error) {
 // Close terminates all underlying socket connections to remote server.
 func (c *Client) Close() error {
 	return c.namenode.Close()
+}
+
+// Username returns the current system user if it is not set.
+//
+// Deprecated: just use user.Current. Previous versions of this function would
+// check the env variable HADOOP_USER_NAME; this functionality was removed.
+func Username() (string, error) {
+	currentUser, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+
+	return currentUser.Username, nil
 }

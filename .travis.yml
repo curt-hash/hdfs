@@ -1,31 +1,21 @@
-os:
-- linux
-- osx
+sudo: required
 language: go
 go_import_path: github.com/colinmarc/hdfs
 go: 1.x
-before_install:
+env:
+- PLATFORM=cdh5
+- PLATFORM=hdp2
+install:
 - git clone https://github.com/sstephenson/bats $HOME/bats
 - mkdir -p $HOME/bats/build
 - "$HOME/bats/install.sh $HOME/bats/build"
 - export PATH="$PATH:$HOME/bats/build/bin"
-env:
-- HADOOP_DISTRO=cdh
-- HADOOP_DISTRO=hdp
+- ./travis-setup.sh $PLATFORM
 before_script:
-- export NN_PORT=9000
-- export HADOOP_NAMENODE="localhost:$NN_PORT"
-- export HADOOP_HOME="$HOME/hadoop-$HADOOP_DISTRO"
-- "./setup_test_env.sh"
-before_deploy: make release
-script:
+- export HADOOP_CONF_DIR="/etc/hadoop/conf"
 - find protocol -name *.pb.go | xargs touch # so make doesn't try to regen protobuf files
-- make test
-- cat minicluster.log
-sudo: false
-cache:
-- "$HOME/hadoop-$HADOOP_DISTRO"
-- "$HOME/bats"
+script: make test
+before_deploy: make release
 deploy:
   skip_cleanup: true
   provider: releases
@@ -37,7 +27,6 @@ deploy:
     repo: colinmarc/hdfs
     tags: true
     all_branches: true
-    condition: $HADOOP_DISTRO = cdh
-matrix:
-  allow_failures:
-    - os: osx
+    condition: $PLATFORM = cdh5
+cache:
+- "$HOME/bats"
